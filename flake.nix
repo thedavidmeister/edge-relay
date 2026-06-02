@@ -30,7 +30,6 @@
             pkgs.worker-build # compiles the Rust worker to a deployable WASM bundle
             pkgs.binaryen # wasm-opt, invoked by worker-build
             pkgs.cargo-tarpaulin # test coverage (`cargo tarpaulin`)
-            pkgs.python3 # stub server for the outbound integration test
           ];
 
           shellHook = ''

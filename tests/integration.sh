@@ -44,8 +44,9 @@ TELEGRAM_API_BASE=$stub
 EOF
 created_devvars=1
 
-echo "== starting stub API on :$STUB_PORT =="
-python3 tests/stub_server.py &
+echo "== building + starting stub API (rust) on :$STUB_PORT =="
+cargo build --example stub_server >/dev/null 2>&1 || { echo "stub build failed"; exit 1; }
+target/debug/examples/stub_server &
 SPID=$!
 
 echo "== starting wrangler dev on :$PORT (first run builds wasm) =="
@@ -67,6 +68,15 @@ expect_code() { # label expected method path [curl args...]
   local label=$1 exp=$2 method=$3 path=$4; shift 4
   local act; act=$(curl -s -o /dev/null -w '%{http_code}' -X "$method" "$base$path" "$@")
   [ "$act" = "$exp" ] && pass "$label ($act)" || fail "$label: expected $exp got $act"
+}
+# Poll the request log for a substring (outbound calls are awaited, but allow a
+# brief settle for the file write to land).
+log_has() {
+  for _ in $(seq 1 40); do
+    grep -q "$1" "$REQ_LOG" && return 0
+    sleep 0.1
+  done
+  return 1
 }
 
 echo "== route wiring + webhook-secret gate =="
@@ -96,11 +106,12 @@ msg=$(grep 'sendMessage' "$REQ_LOG" || true)
 echo "$msg" | grep -q 'Vibrating at 9' && pass "Telegram reply = ack text" || fail "telegram reply wrong: $msg"
 
 echo "== /pair (Telegram, authorized) triggers getQrCode and replies the link =="
-curl -s -o /dev/null -X POST "$base/telegram" \
+pair=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/telegram" \
   -H "X-Telegram-Bot-Api-Secret-Token: $SECRET" -H 'content-type: application/json' \
-  -d '{"message":{"text":"/pair","from":{"id":42},"chat":{"id":5}}}'
-grep -q '/api/lan/getQrCode' "$REQ_LOG" && pass "getQrCode was called" || fail "no getQrCode POST recorded"
-grep 'sendMessage' "$REQ_LOG" | grep -q 'qrcode.png' && pass "reply contains the QR url" || fail "reply missing QR url"
+  -d '{"message":{"text":"/pair","from":{"id":42},"chat":{"id":5}}}')
+[ "$pair" = "200" ] && pass "/pair accepted ($pair)" || fail "/pair returned $pair"
+log_has '/api/lan/getQrCode' && pass "getQrCode was called" || fail "no getQrCode POST recorded"
+log_has 'qrcode.png' && pass "reply contains the QR url" || fail "reply missing QR url"
 
 echo "== the unauthenticated GET /pair route is gone =="
 expect_code "GET /pair removed -> 404" 404 GET /pair
