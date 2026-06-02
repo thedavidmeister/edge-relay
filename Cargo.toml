@@ -5,15 +5,22 @@ edition = "2021"
 authors = ["David Meister <thedavidmeister@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/thedavidmeister/edge-relay"
+description = "Cloudflare Worker (Rust) that relays webhooks between services"
 
 [lib]
-crate-type = ["cdylib"]
+# cdylib for the WASM worker; rlib so `cargo test` can build a native harness.
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-worker = "0.4"
-console_error_panic_hook = "0.1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+md5 = "0.7"
+
+# `worker` only compiles for wasm32, so native `cargo test`/`clippy` never pull
+# it in — the pure logic in command/telegram/lovense/auth is tested on the host.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+worker = "0.4"
+console_error_panic_hook = "0.1"
 
 [profile.release]
 opt-level = "s"

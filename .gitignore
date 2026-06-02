@@ -1,6 +1,10 @@
 /target
 /build
+/result
 /node_modules
+.direnv/
 .wrangler/
 .dev.vars
 *.log
+tarpaulin-report.*
+cobertura.xml

@@ -3,8 +3,9 @@ main = "build/worker/shim.mjs"
 compatibility_date = "2025-06-01"
 
 # Rust workers are compiled to WASM by worker-build during `wrangler deploy`.
+# worker-build is provided by the nix dev shell (or `cargo install worker-build`).
 [build]
-command = "cargo install -q worker-build && worker-build --release"
+command = "worker-build --release"
 
 # Secrets (set with `wrangler secret put <NAME>`, never commit these):
 #   BOT_TOKEN        - Telegram bot token from @BotFather
