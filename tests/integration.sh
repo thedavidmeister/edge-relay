@@ -95,10 +95,15 @@ fi
 msg=$(grep 'sendMessage' "$REQ_LOG" || true)
 echo "$msg" | grep -q 'Vibrating at 9' && pass "Telegram reply = ack text" || fail "telegram reply wrong: $msg"
 
-echo "== outbound: /pair returns the QR url from getQrCode =="
-pair=$(curl -s "$base/pair")
-[ "$pair" = "http://stub/qrcode.png" ] && pass "/pair returns stub QR url" || fail "/pair body: [$pair]"
+echo "== /pair (Telegram, authorized) triggers getQrCode and replies the link =="
+curl -s -o /dev/null -X POST "$base/telegram" \
+  -H "X-Telegram-Bot-Api-Secret-Token: $SECRET" -H 'content-type: application/json' \
+  -d '{"message":{"text":"/pair","from":{"id":42},"chat":{"id":5}}}'
 grep -q '/api/lan/getQrCode' "$REQ_LOG" && pass "getQrCode was called" || fail "no getQrCode POST recorded"
+grep 'sendMessage' "$REQ_LOG" | grep -q 'qrcode.png' && pass "reply contains the QR url" || fail "reply missing QR url"
+
+echo "== the unauthenticated GET /pair route is gone =="
+expect_code "GET /pair removed -> 404" 404 GET /pair
 
 # Count Lovense command POSTs recorded so far (grep -c prints 0 / exits 1 when none).
 commands() { grep -c '/api/lan/command' "$REQ_LOG" 2>/dev/null || true; }

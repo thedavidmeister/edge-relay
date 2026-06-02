@@ -19,7 +19,6 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .get("/", |_, _| Response::ok("edge-relay: ok"))
         .post_async("/telegram", on_telegram)
         .post_async("/lovense-callback", on_callback)
-        .get_async("/pair", on_pair)
         .run(req, env)
         .await
 }
@@ -83,11 +82,6 @@ async fn on_callback(mut req: Request, _ctx: RouteContext<()>) -> Result<Respons
         );
     }
     Response::ok("ok")
-}
-
-/// Manual pairing helper: returns the QR image URL.
-async fn on_pair(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
-    Response::ok(request_qr(&ctx).await?)
 }
 
 async fn send_lovense(ctx: &RouteContext<()>, cmd: Command) -> Result<()> {

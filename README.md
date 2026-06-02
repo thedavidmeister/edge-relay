@@ -14,15 +14,17 @@ chosen at pairing time, so there's no database.
 ```
 You ──/vibrate 15──▶ Telegram ──webhook──▶ edge-relay (Worker) ──HTTPS──▶ Lovense Cloud ──▶ device
                                                 ▲
-        device app ──scans QR once──▶ /pair ────┘  (callback → /lovense-callback)
+        device app ──scans QR──▶ (from the gated /pair command) ──┘  (callback → /lovense-callback)
 ```
 
 | Route               | Method | Purpose                                     |
 |---------------------|--------|---------------------------------------------|
 | `/`                 | GET    | Health check                                |
-| `/pair`             | GET    | Request a pairing QR code                   |
 | `/lovense-callback` | POST   | Pairing confirmation / device-online status |
 | `/telegram`         | POST   | Telegram webhook — incoming commands        |
+
+Pairing is requested with the authenticated Telegram `/pair` command, not an
+HTTP route — there is no unauthenticated endpoint that can trigger pairing.
 
 ### Code layout
 
