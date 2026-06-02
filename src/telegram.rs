@@ -822,4 +822,48 @@ mod tests {
             assert!(!invalid_reply(&e).is_empty());
         }
     }
+
+    // --- robustness / never-panic eventualities ---
+
+    #[test]
+    fn parse_handles_unicode_command_gracefully() {
+        // Non-ASCII command names must not panic on the `raw[1..]` byte slice.
+        assert_eq!(
+            parse("/café"),
+            Err(ParseError::UnknownCommand("café".into()))
+        );
+        assert_eq!(parse("/🔥"), Err(ParseError::UnknownCommand("🔥".into())));
+        // Unicode is lowercased like ASCII.
+        assert_eq!(
+            parse("/CAFÉ"),
+            Err(ParseError::UnknownCommand("café".into()))
+        );
+    }
+
+    #[test]
+    fn parse_never_panics_on_adversarial_input() {
+        let long = "/".repeat(10_000);
+        let inputs = [
+            "",
+            " ",
+            "\t",
+            "/",
+            "//",
+            "/@",
+            "/@bot",
+            "/ x",
+            "/\u{0}",
+            "/vibrate\u{0}",
+            "/vibrate 99999999999999999999",
+            "/vibrate -1 -1",
+            "/vibrate 5 99999999999999h",
+            "🔥/stop",
+            long.as_str(),
+        ];
+        // The only contract under fuzz-like input is: it returns, never panics.
+        for s in inputs {
+            let _ = parse(s);
+            let _ = parse_duration(s);
+        }
+    }
 }

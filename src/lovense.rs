@@ -236,4 +236,22 @@ mod tests {
         assert_eq!(extract_qr_url("not json at all"), None);
         assert_eq!(extract_qr_url(""), None);
     }
+
+    #[test]
+    fn extract_qr_url_none_when_data_is_not_an_object() {
+        // `data` present but a string, not an object — must not panic.
+        assert_eq!(extract_qr_url(r#"{ "data": "oops" }"#), None);
+    }
+
+    #[test]
+    fn online_toys_treats_unexpected_status_as_offline() {
+        // Only status == 1 is online; other values (2, -1) are not.
+        let body = r#"{ "uid": "x", "toys": {
+            "a": { "status": 2 }, "b": { "status": -1 }, "c": { "status": 1 }
+        } }"#;
+        let cb: Callback = serde_json::from_str(body).unwrap();
+        let online = cb.online_toys();
+        assert_eq!(online.len(), 1);
+        assert_eq!(online[0].status, 1);
+    }
 }
