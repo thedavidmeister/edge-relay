@@ -11,11 +11,20 @@ name: Deploy
 #   LOVENSE_TOKEN          (Lovense developer dashboard)
 #   LOVENSE_SALT           (random string)
 #   ALLOWED_USER_ID        (your Telegram numeric user id)
+#
+# Triggers: manual, or automatically after CI succeeds on main (so a red build
+# never deploys to the live bot).
 on:
   workflow_dispatch:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
 
 jobs:
   deploy:
+    # Manual runs always deploy; auto runs only when the CI run was green.
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
