@@ -1,6 +1,8 @@
-//! Parsing of incoming Telegram message text into bot commands.
+//! Parsing of incoming Telegram updates into bot commands and dispatch
+//! decisions.
 
 use crate::command::{Command, MAX_STRENGTH};
+use serde::Deserialize;
 
 /// A parsed bot command.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,8 +83,9 @@ pub fn parse(text: &str) -> Result<BotCommand, ParseError> {
 
 /// Parse a duration token into seconds.
 ///
-/// Accepts a bare number (seconds) or a `s`/`m`/`h` suffix: `30`, `30s`,
-/// `2m`, `1h`. Overflow is reported as [`ParseError::InvalidDuration`].
+/// Accepts a bare number (seconds) or a case-insensitive `s`/`m`/`h` suffix:
+/// `30`, `30s`, `2M`, `1h`. Overflow (of the value or the unit multiply) is
+/// reported as [`ParseError::InvalidDuration`].
 pub fn parse_duration(s: &str) -> Result<u32, ParseError> {
     let s = s.trim();
     let invalid = || ParseError::InvalidDuration(s.to_string());
@@ -90,14 +93,16 @@ pub fn parse_duration(s: &str) -> Result<u32, ParseError> {
         return Err(invalid());
     }
 
-    let (num, mult) = if let Some(n) = s.strip_suffix('s') {
+    // Match the unit suffix case-insensitively (30S behaves like 30s).
+    let lower = s.to_ascii_lowercase();
+    let (num, mult) = if let Some(n) = lower.strip_suffix('s') {
         (n, 1)
-    } else if let Some(n) = s.strip_suffix('m') {
+    } else if let Some(n) = lower.strip_suffix('m') {
         (n, 60)
-    } else if let Some(n) = s.strip_suffix('h') {
+    } else if let Some(n) = lower.strip_suffix('h') {
         (n, 3600)
     } else {
-        (s, 1)
+        (lower.as_str(), 1)
     };
 
     let value: u32 = num.parse().map_err(|_| invalid())?;
@@ -115,6 +120,77 @@ impl BotCommand {
             BotCommand::Stop => Some(Command::stop()),
             BotCommand::Pair | BotCommand::Help | BotCommand::Status => None,
         }
+    }
+}
+
+/// A Telegram `Update` (only the fields we use).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Update {
+    pub message: Option<Message>,
+}
+
+/// A Telegram message. Non-text messages (stickers, photos) carry no `text`,
+/// which defaults to empty.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Message {
+    #[serde(default)]
+    pub text: String,
+    pub from: Option<User>,
+    pub chat: Chat,
+}
+
+/// The sender of a message.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct User {
+    pub id: i64,
+}
+
+/// The chat a message belongs to (where replies go).
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Chat {
+    pub id: i64,
+}
+
+/// What the worker should do with an incoming update.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Dispatch {
+    /// Do nothing and send no reply: no message, an unauthorized sender, or
+    /// plain chatter that isn't a command.
+    Ignore,
+    /// A recognized command from the authorized user; run it and reply.
+    Command { chat_id: i64, command: BotCommand },
+    /// The authorized user sent a malformed command; reply with the reason.
+    Invalid { chat_id: i64, error: ParseError },
+}
+
+/// Decide what to do with an `update`, given the single `allowed_id`.
+///
+/// Strangers and plain (non-command) chatter are ignored silently — that keeps
+/// the bot discreet and avoids "couldn't parse" spam on normal messages. Only
+/// the authorized user's actual command attempts produce a reply.
+pub fn dispatch(update: &Update, allowed_id: i64) -> Dispatch {
+    let Some(msg) = update.message.as_ref() else {
+        return Dispatch::Ignore;
+    };
+    // A message with no `from` (e.g. a channel post) is never authorized — we
+    // never fall back to a default id that could match a misconfigured 0.
+    let Some(user) = msg.from.as_ref() else {
+        return Dispatch::Ignore;
+    };
+    if !crate::auth::is_allowed(user.id, allowed_id) {
+        return Dispatch::Ignore;
+    }
+    match parse(&msg.text) {
+        Ok(command) => Dispatch::Command {
+            chat_id: msg.chat.id,
+            command,
+        },
+        // Plain text (not a slash command) is conversation, not an error.
+        Err(ParseError::Empty | ParseError::NotACommand) => Dispatch::Ignore,
+        Err(error) => Dispatch::Invalid {
+            chat_id: msg.chat.id,
+            error,
+        },
     }
 }
 
@@ -414,5 +490,207 @@ mod tests {
     #[test]
     fn default_time_sec_is_zero() {
         assert_eq!(DEFAULT_TIME_SEC, 0);
+    }
+
+    // --- boundary eventualities ---
+
+    #[test]
+    fn duration_suffix_is_case_insensitive() {
+        assert_eq!(parse_duration("30S"), Ok(30));
+        assert_eq!(parse_duration("2M"), Ok(120));
+        assert_eq!(parse_duration("1H"), Ok(3600));
+    }
+
+    #[test]
+    fn vibrate_uppercase_duration_suffix() {
+        assert_eq!(
+            parse("/vibrate 5 2M"),
+            Ok(BotCommand::Vibrate {
+                strength: 5,
+                time_sec: 120
+            })
+        );
+    }
+
+    #[test]
+    fn strength_at_u8_max_clamps_to_twenty() {
+        // 255 is a valid u8, so it parses then clamps — it is not an error.
+        assert_eq!(
+            parse("/vibrate 255"),
+            Ok(BotCommand::Vibrate {
+                strength: 20,
+                time_sec: 0
+            })
+        );
+    }
+
+    #[test]
+    fn strength_just_above_u8_errors() {
+        // 256 is the first value that does not fit in u8.
+        assert_eq!(
+            parse("/vibrate 256"),
+            Err(ParseError::InvalidStrength("256".into()))
+        );
+    }
+
+    #[test]
+    fn strength_leading_plus_is_accepted() {
+        // u8 parsing allows a leading '+', so "+5" is strength 5.
+        assert_eq!(
+            parse("/vibrate +5"),
+            Ok(BotCommand::Vibrate {
+                strength: 5,
+                time_sec: 0
+            })
+        );
+    }
+
+    #[test]
+    fn duration_at_u32_max_is_ok() {
+        assert_eq!(parse_duration("4294967295"), Ok(u32::MAX));
+    }
+
+    #[test]
+    fn duration_just_above_u32_errors() {
+        assert_eq!(
+            parse_duration("4294967296"),
+            Err(ParseError::InvalidDuration("4294967296".into()))
+        );
+    }
+
+    #[test]
+    fn duration_negative_errors() {
+        assert_eq!(
+            parse_duration("-30"),
+            Err(ParseError::InvalidDuration("-30".into()))
+        );
+    }
+
+    #[test]
+    fn extra_trailing_tokens_are_ignored() {
+        // Tokens after the duration are ignored rather than rejected.
+        assert_eq!(
+            parse("/vibrate 5 30 garbage here"),
+            Ok(BotCommand::Vibrate {
+                strength: 5,
+                time_sec: 30
+            })
+        );
+    }
+
+    // --- dispatch decision eventualities ---
+
+    fn update(json: &str) -> Update {
+        serde_json::from_str(json).unwrap()
+    }
+
+    #[test]
+    fn dispatch_ignores_update_without_message() {
+        assert_eq!(dispatch(&update(r#"{}"#), 42), Dispatch::Ignore);
+    }
+
+    #[test]
+    fn dispatch_ignores_unauthorized_sender() {
+        let u = update(r#"{"message":{"text":"/stop","from":{"id":999},"chat":{"id":5}}}"#);
+        assert_eq!(dispatch(&u, 42), Dispatch::Ignore);
+    }
+
+    #[test]
+    fn dispatch_ignores_message_without_sender() {
+        // No `from` → never authorized.
+        let u = update(r#"{"message":{"text":"/stop","chat":{"id":5}}}"#);
+        assert_eq!(dispatch(&u, 42), Dispatch::Ignore);
+    }
+
+    #[test]
+    fn dispatch_runs_authorized_stop() {
+        let u = update(r#"{"message":{"text":"/stop","from":{"id":42},"chat":{"id":5}}}"#);
+        assert_eq!(
+            dispatch(&u, 42),
+            Dispatch::Command {
+                chat_id: 5,
+                command: BotCommand::Stop
+            }
+        );
+    }
+
+    #[test]
+    fn dispatch_runs_authorized_vibrate_with_chat_id() {
+        let u = update(r#"{"message":{"text":"/vibrate 9 30s","from":{"id":42},"chat":{"id":7}}}"#);
+        assert_eq!(
+            dispatch(&u, 42),
+            Dispatch::Command {
+                chat_id: 7,
+                command: BotCommand::Vibrate {
+                    strength: 9,
+                    time_sec: 30
+                }
+            }
+        );
+    }
+
+    #[test]
+    fn dispatch_ignores_plain_chatter_from_authorized_user() {
+        let u = update(r#"{"message":{"text":"hello love","from":{"id":42},"chat":{"id":5}}}"#);
+        assert_eq!(dispatch(&u, 42), Dispatch::Ignore);
+    }
+
+    #[test]
+    fn dispatch_ignores_empty_text_from_authorized_user() {
+        let u = update(r#"{"message":{"text":"","from":{"id":42},"chat":{"id":5}}}"#);
+        assert_eq!(dispatch(&u, 42), Dispatch::Ignore);
+    }
+
+    #[test]
+    fn dispatch_ignores_non_text_message() {
+        // A sticker/photo message has no `text` field at all.
+        let u = update(r#"{"message":{"from":{"id":42},"chat":{"id":5}}}"#);
+        assert_eq!(dispatch(&u, 42), Dispatch::Ignore);
+    }
+
+    #[test]
+    fn dispatch_reports_missing_strength_to_authorized_user() {
+        let u = update(r#"{"message":{"text":"/vibrate","from":{"id":42},"chat":{"id":5}}}"#);
+        assert_eq!(
+            dispatch(&u, 42),
+            Dispatch::Invalid {
+                chat_id: 5,
+                error: ParseError::MissingStrength
+            }
+        );
+    }
+
+    #[test]
+    fn dispatch_reports_unknown_command_to_authorized_user() {
+        let u = update(r#"{"message":{"text":"/wat","from":{"id":42},"chat":{"id":5}}}"#);
+        assert_eq!(
+            dispatch(&u, 42),
+            Dispatch::Invalid {
+                chat_id: 5,
+                error: ParseError::UnknownCommand("wat".into())
+            }
+        );
+    }
+
+    #[test]
+    fn dispatch_ignores_missing_sender_even_when_allowed_is_zero() {
+        // The default-0 footgun is closed: a message with no `from` is ignored
+        // even if the allowed id were somehow 0.
+        let u = update(r#"{"message":{"text":"/stop","chat":{"id":5}}}"#);
+        assert_eq!(dispatch(&u, 0), Dispatch::Ignore);
+    }
+
+    #[test]
+    fn dispatch_authorizes_real_zero_sender_when_allowed_is_zero() {
+        // A present sender with id 0 still matches an allowed id of 0 — the
+        // gate is exact equality, only the *missing* sender is special-cased.
+        let u = update(r#"{"message":{"text":"/stop","from":{"id":0},"chat":{"id":5}}}"#);
+        assert_eq!(
+            dispatch(&u, 0),
+            Dispatch::Command {
+                chat_id: 5,
+                command: BotCommand::Stop
+            }
+        );
     }
 }

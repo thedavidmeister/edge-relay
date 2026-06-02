@@ -64,6 +64,19 @@ impl Callback {
     }
 }
 
+/// Extract the QR image URL (`data.qr`) from a `getQrCode` response body.
+///
+/// Returns `None` if the body is not JSON, has no `data.qr`, or `qr` is not a
+/// string — e.g. an error response such as `{"code":401,"message":"..."}`.
+pub fn extract_qr_url(response_body: &str) -> Option<String> {
+    let value: serde_json::Value = serde_json::from_str(response_body).ok()?;
+    value
+        .get("data")?
+        .get("qr")?
+        .as_str()
+        .map(|s| s.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -185,5 +198,42 @@ mod tests {
         // uid is required (no default), so this must error.
         let err = serde_json::from_str::<Callback>(r#"{ "toys": {} }"#);
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn extract_qr_url_from_success_response() {
+        let body = r#"{
+            "code": 0, "message": "Success", "result": true,
+            "data": { "qr": "https://api.lovense.com/x.jpg", "code": "ab12" }
+        }"#;
+        assert_eq!(
+            extract_qr_url(body).as_deref(),
+            Some("https://api.lovense.com/x.jpg")
+        );
+    }
+
+    #[test]
+    fn extract_qr_url_none_when_data_missing() {
+        // A typical error response carries no `data`.
+        assert_eq!(
+            extract_qr_url(r#"{ "code": 401, "message": "token invalid" }"#),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_qr_url_none_when_qr_missing() {
+        assert_eq!(extract_qr_url(r#"{ "data": { "code": "ab12" } }"#), None);
+    }
+
+    #[test]
+    fn extract_qr_url_none_when_qr_not_a_string() {
+        assert_eq!(extract_qr_url(r#"{ "data": { "qr": 123 } }"#), None);
+    }
+
+    #[test]
+    fn extract_qr_url_none_for_non_json() {
+        assert_eq!(extract_qr_url("not json at all"), None);
+        assert_eq!(extract_qr_url(""), None);
     }
 }

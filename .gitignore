@@ -8,3 +8,6 @@
 *.log
 tarpaulin-report.*
 cobertura.xml
+
+# agent scratchpad — persistent working notes, not for the repo
+.notes.md

@@ -1,14 +1,14 @@
 //! Cloudflare Worker entrypoint and HTTP glue. Compiled only for `wasm32`.
 //!
 //! This is the thin, side-effecting shell around the pure logic in the sibling
-//! modules: it reads secrets, verifies the Telegram webhook, parses the update,
-//! gates on the allowed user, and performs the outbound HTTP calls.
+//! modules. The decision of what to do with an update lives in
+//! [`telegram::dispatch`]; here we only read secrets, verify the webhook, and
+//! perform the outbound HTTP.
 
 use crate::auth;
 use crate::command::{self, Command};
 use crate::lovense::{self, QrRequest};
-use crate::telegram::{self, BotCommand};
-use serde::Deserialize;
+use crate::telegram::{self, BotCommand, Dispatch};
 use worker::*;
 
 const HELP: &str = "Commands:\n\
@@ -30,30 +30,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         .await
 }
 
-#[derive(Deserialize)]
-struct Update {
-    message: Option<Message>,
-}
-
-#[derive(Deserialize)]
-struct Message {
-    #[serde(default)]
-    text: String,
-    from: Option<TgUser>,
-    chat: Chat,
-}
-
-#[derive(Deserialize)]
-struct TgUser {
-    id: i64,
-}
-
-#[derive(Deserialize)]
-struct Chat {
-    id: i64,
-}
-
-/// Telegram webhook: verify, authorize, parse, dispatch.
+/// Telegram webhook: verify the secret, then act on the dispatch decision.
 async fn on_telegram(mut req: Request, ctx: RouteContext<()>) -> Result<Response> {
     // Reject anything that doesn't carry our shared webhook secret.
     let want = ctx.secret("TG_WEBHOOK_SECRET")?.to_string();
@@ -66,37 +43,42 @@ async fn on_telegram(mut req: Request, ctx: RouteContext<()>) -> Result<Response
     }
 
     let body = req.text().await?;
-    let Ok(update) = serde_json::from_str::<Update>(&body) else {
+    let Ok(update) = serde_json::from_str::<telegram::Update>(&body) else {
         return Response::ok("ignored");
     };
-    let Some(msg) = update.message else {
-        return Response::ok("ignored");
-    };
-
     let allowed =
         auth::parse_allowed_id(&ctx.secret("ALLOWED_USER_ID")?.to_string()).unwrap_or(i64::MIN);
-    let user_id = msg.from.as_ref().map(|u| u.id).unwrap_or_default();
-    if !auth::is_allowed(user_id, allowed) {
-        reply(&ctx, msg.chat.id, "Not authorized.").await.ok();
-        return Response::ok("forbidden");
-    }
 
-    let response_text = match telegram::parse(&msg.text) {
-        Ok(BotCommand::Vibrate { strength, time_sec }) => {
-            send_lovense(&ctx, Command::vibrate(strength, time_sec)).await?;
+    match telegram::dispatch(&update, allowed) {
+        Dispatch::Ignore => Response::ok("ignored"),
+        Dispatch::Command { chat_id, command } => {
+            let text = run_command(&ctx, command).await?;
+            reply(&ctx, chat_id, &text).await.ok();
+            Response::ok("ok")
+        }
+        Dispatch::Invalid { chat_id, error } => {
+            reply(&ctx, chat_id, &format!("Couldn't parse that: {error:?}"))
+                .await
+                .ok();
+            Response::ok("ok")
+        }
+    }
+}
+
+/// Perform the side effects for a recognized command and return the reply text.
+async fn run_command(ctx: &RouteContext<()>, command: BotCommand) -> Result<String> {
+    Ok(match command {
+        BotCommand::Vibrate { strength, time_sec } => {
+            send_lovense(ctx, Command::vibrate(strength, time_sec)).await?;
             format!("Vibrate {strength} for {time_sec}s")
         }
-        Ok(BotCommand::Stop) => {
-            send_lovense(&ctx, Command::stop()).await?;
+        BotCommand::Stop => {
+            send_lovense(ctx, Command::stop()).await?;
             "Stopped.".to_string()
         }
-        Ok(BotCommand::Pair) => format!("Scan to pair: {}", request_qr(&ctx).await?),
-        Ok(BotCommand::Help | BotCommand::Status) => HELP.to_string(),
-        Err(e) => format!("Couldn't parse that: {e:?}"),
-    };
-    reply(&ctx, msg.chat.id, &response_text).await.ok();
-
-    Response::ok("ok")
+        BotCommand::Pair => format!("Scan to pair: {}", request_qr(ctx).await?),
+        BotCommand::Help | BotCommand::Status => HELP.to_string(),
+    })
 }
 
 /// Lovense pairing callback — log the toy status and acknowledge.
@@ -134,11 +116,8 @@ async fn request_qr(ctx: &RouteContext<()>) -> Result<String> {
         .unwrap_or_default();
     let body = to_json(&QrRequest::new(&token, &uid, "telegram", &salt))?;
     let resp = post_json(lovense::QR_URL, &body).await?;
-    let value: serde_json::Value = serde_json::from_str(&resp).unwrap_or_default();
-    Ok(value["data"]["qr"]
-        .as_str()
-        .unwrap_or(resp.as_str())
-        .to_string())
+    // Fall back to the raw response if the QR field isn't where we expect.
+    Ok(lovense::extract_qr_url(&resp).unwrap_or(resp))
 }
 
 async fn reply(ctx: &RouteContext<()>, chat_id: i64, text: &str) -> Result<()> {
