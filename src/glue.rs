@@ -62,7 +62,7 @@ async fn on_telegram(mut req: Request, ctx: RouteContext<()>) -> Result<Response
 async fn run_command(ctx: &RouteContext<()>, command: BotCommand) -> Result<String> {
     // Pair is the only reply that needs a network result (the QR URL).
     if let BotCommand::Pair = command {
-        return Ok(format!("Scan to pair: {}", request_qr(ctx).await?));
+        return request_qr(ctx).await;
     }
     // Vibrate/Stop drive the toy; Help/Status have no effect.
     if let Some(cmd) = command.to_lovense() {
@@ -103,8 +103,8 @@ async fn request_qr(ctx: &RouteContext<()>) -> Result<String> {
     let base = var_or(ctx, "LOVENSE_API_BASE", lovense::DEFAULT_API_BASE);
     let body = to_json(&QrRequest::new(&token, &uid, "telegram", &salt))?;
     let resp = post_json(&lovense::qr_url(&base), &body).await?;
-    // Fall back to the raw response if the QR field isn't where we expect.
-    Ok(lovense::extract_qr_url(&resp).unwrap_or(resp))
+    // pair_reply renders the link, or a friendly error (never raw API JSON).
+    Ok(lovense::pair_reply(&resp))
 }
 
 async fn reply(ctx: &RouteContext<()>, chat_id: i64, text: &str) -> Result<()> {

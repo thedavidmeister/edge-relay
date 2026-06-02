@@ -89,6 +89,17 @@ pub fn extract_qr_url(response_body: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// Build the user-facing reply for a `getQrCode` response: the pairing link, or
+/// a friendly error (never the raw API JSON) when there's no QR — e.g. a bad
+/// developer token.
+pub fn pair_reply(response_body: &str) -> String {
+    match extract_qr_url(response_body) {
+        Some(url) => format!("Scan this to pair: {url}"),
+        None => "Couldn't get a pairing code — check that the Lovense token is set correctly."
+            .to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,5 +292,26 @@ mod tests {
         let online = cb.online_toys();
         assert_eq!(online.len(), 1);
         assert_eq!(online[0].status, 1);
+    }
+
+    #[test]
+    fn pair_reply_gives_link_on_success() {
+        let body = r#"{ "code": 0, "data": { "qr": "http://x/q.png" } }"#;
+        assert_eq!(pair_reply(body), "Scan this to pair: http://x/q.png");
+    }
+
+    #[test]
+    fn pair_reply_friendly_error_never_leaks_raw_json() {
+        // A bad-token error response must produce a hint, not the raw JSON.
+        let r = pair_reply(r#"{ "code": 401, "message": "token invalid" }"#);
+        assert!(r.contains("Lovense token"), "got: {r}");
+        assert!(!r.contains("401"));
+        assert!(!r.contains('{'));
+    }
+
+    #[test]
+    fn pair_reply_friendly_error_on_non_json() {
+        assert!(!pair_reply("garbage").is_empty());
+        assert!(!pair_reply("garbage").contains("garbage"));
     }
 }
