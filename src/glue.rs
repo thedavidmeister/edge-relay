@@ -129,7 +129,7 @@ async fn reply(ctx: &RouteContext<()>, chat_id: i64, text: &str) -> Result<()> {
 }
 
 async fn post_json(url: &str, body: &str) -> Result<String> {
-    let mut headers = Headers::new();
+    let headers = Headers::new();
     headers.set("content-type", "application/json")?;
 
     let mut init = RequestInit::new();
