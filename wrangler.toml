@@ -1,0 +1,17 @@
+name = "edge-relay"
+main = "build/worker/shim.mjs"
+compatibility_date = "2025-06-01"
+
+# Rust workers are compiled to WASM by worker-build during `wrangler deploy`.
+[build]
+command = "cargo install -q worker-build && worker-build --release"
+
+# Secrets (set with `wrangler secret put <NAME>`, never commit these):
+#   BOT_TOKEN        - Telegram bot token from @BotFather
+#   TG_WEBHOOK_SECRET- random string; checked against X-Telegram-Bot-Api-Secret-Token
+#   LOVENSE_TOKEN    - Lovense developer token
+#   ALLOWED_USER_ID  - your Telegram numeric user id (only this user may send commands)
+#
+# Plain vars (safe to commit) can go here:
+[vars]
+LOVENSE_UID = "gf"
