@@ -100,6 +100,41 @@ pair=$(curl -s "$base/pair")
 [ "$pair" = "http://stub/qrcode.png" ] && pass "/pair returns stub QR url" || fail "/pair body: [$pair]"
 grep -q '/api/lan/getQrCode' "$REQ_LOG" && pass "getQrCode was called" || fail "no getQrCode POST recorded"
 
+# Count Lovense command POSTs recorded so far (grep -c prints 0 / exits 1 when none).
+commands() { grep -c '/api/lan/command' "$REQ_LOG" 2>/dev/null || true; }
+
+echo "== safety: a stranger's command must NOT reach the toy =="
+before=$(commands)
+unauth=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/telegram" \
+  -H "X-Telegram-Bot-Api-Secret-Token: $SECRET" -H 'content-type: application/json' \
+  -d '{"message":{"text":"/vibrate 20","from":{"id":999},"chat":{"id":5}}}')
+after=$(commands)
+[ "$unauth" = "200" ] && pass "unauthorized request accepted + ignored ($unauth)" || fail "unauthorized: got $unauth"
+[ "$before" = "$after" ] && pass "unauthorized command did NOT reach Lovense" || fail "unauthorized LEAKED a command ($before -> $after)"
+
+echo "== /stop (safe-word) sends action=Stop =="
+curl -s -o /dev/null -X POST "$base/telegram" \
+  -H "X-Telegram-Bot-Api-Secret-Token: $SECRET" -H 'content-type: application/json' \
+  -d '{"message":{"text":"/stop","from":{"id":42},"chat":{"id":5}}}'
+grep '/api/lan/command' "$REQ_LOG" | grep -q 'Stop' && pass "/stop sent action=Stop" || fail "/stop did not send Stop"
+
+echo "== invalid command replies usage, sends no command =="
+before=$(commands)
+curl -s -o /dev/null -X POST "$base/telegram" \
+  -H "X-Telegram-Bot-Api-Secret-Token: $SECRET" -H 'content-type: application/json' \
+  -d '{"message":{"text":"/vibrate abc","from":{"id":42},"chat":{"id":5}}}'
+after=$(commands)
+[ "$before" = "$after" ] && pass "invalid command sent no Lovense command" || fail "invalid command leaked a command"
+grep 'sendMessage' "$REQ_LOG" | grep -q '0-20' && pass "invalid command got a usage reply" || fail "no usage reply for invalid command"
+
+echo "== malformed update body is ignored (200, no command) =="
+before=$(commands)
+mal=$(curl -s -o /dev/null -w '%{http_code}' -X POST "$base/telegram" \
+  -H "X-Telegram-Bot-Api-Secret-Token: $SECRET" -d 'not json at all')
+after=$(commands)
+[ "$mal" = "200" ] && pass "malformed body -> 200 ($mal)" || fail "malformed body: got $mal"
+[ "$before" = "$after" ] && pass "malformed body sent no command" || fail "malformed body leaked a command"
+
 echo
 if [ "$fails" -eq 0 ]; then
   echo "integration: ALL PASS"
