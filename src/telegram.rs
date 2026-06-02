@@ -40,6 +40,13 @@ pub enum ParseError {
 /// Default vibration duration when none is supplied (`0` = until `/stop`).
 pub const DEFAULT_TIME_SEC: u32 = 0;
 
+/// Help text listing the available commands.
+pub const HELP: &str = "Commands:\n\
+    /vibrate <0-20> [secs|30s|2m|1h]\n\
+    /stop\n\
+    /pair\n\
+    /help";
+
 /// Parse raw Telegram message `text` into a [`BotCommand`].
 ///
 /// Accepts a leading `/`, an optional `@botname` suffix, and is
@@ -121,6 +128,25 @@ impl BotCommand {
             BotCommand::Pair | BotCommand::Help | BotCommand::Status => None,
         }
     }
+
+    /// The reply text confirming this command, for commands whose reply is
+    /// self-contained. `Pair` returns `None` because its reply needs the QR
+    /// URL from a network call.
+    pub fn ack(&self) -> Option<String> {
+        Some(match self {
+            BotCommand::Vibrate { strength, time_sec } => {
+                if *time_sec == 0 {
+                    // 0 means "run until stopped", not "0 seconds".
+                    format!("Vibrating at {strength} until /stop.")
+                } else {
+                    format!("Vibrating at {strength} for {time_sec}s.")
+                }
+            }
+            BotCommand::Stop => "Stopped.".to_string(),
+            BotCommand::Help | BotCommand::Status => HELP.to_string(),
+            BotCommand::Pair => return None,
+        })
+    }
 }
 
 /// A Telegram `Update` (only the fields we use).
@@ -191,6 +217,23 @@ pub fn dispatch(update: &Update, allowed_id: i64) -> Dispatch {
             chat_id: msg.chat.id,
             error,
         },
+    }
+}
+
+/// A friendly, user-facing message for a parse error (instead of the raw
+/// `Debug` form). Total over [`ParseError`]; `dispatch` only surfaces the
+/// command-attempt variants, but the others are handled for completeness.
+pub fn invalid_reply(error: &ParseError) -> String {
+    match error {
+        ParseError::MissingStrength => "Usage: /vibrate <0-20> [30s|2m|1h]".to_string(),
+        ParseError::InvalidStrength(s) => {
+            format!("Strength must be a number 0-20 (got \"{s}\").")
+        }
+        ParseError::InvalidDuration(d) => {
+            format!("Couldn't read the duration \"{d}\". Try 30s, 2m, or 1h.")
+        }
+        ParseError::UnknownCommand(c) => format!("Unknown command /{c}. Send /help."),
+        ParseError::Empty | ParseError::NotACommand => "Send /help.".to_string(),
     }
 }
 
@@ -692,5 +735,91 @@ mod tests {
                 command: BotCommand::Stop
             }
         );
+    }
+
+    // --- reply rendering ---
+
+    #[test]
+    fn ack_vibrate_with_duration_reads_naturally() {
+        let r = BotCommand::Vibrate {
+            strength: 9,
+            time_sec: 30,
+        }
+        .ack()
+        .unwrap();
+        assert_eq!(r, "Vibrating at 9 for 30s.");
+    }
+
+    #[test]
+    fn ack_vibrate_zero_duration_says_until_stop_not_zero_seconds() {
+        // Regression: 0 means "until /stop", so the reply must not say "0s".
+        let r = BotCommand::Vibrate {
+            strength: 12,
+            time_sec: 0,
+        }
+        .ack()
+        .unwrap();
+        assert_eq!(r, "Vibrating at 12 until /stop.");
+        assert!(!r.contains("0s"));
+    }
+
+    #[test]
+    fn ack_stop() {
+        assert_eq!(BotCommand::Stop.ack().as_deref(), Some("Stopped."));
+    }
+
+    #[test]
+    fn ack_help_and_status_return_help_text() {
+        assert_eq!(BotCommand::Help.ack().as_deref(), Some(HELP));
+        assert_eq!(BotCommand::Status.ack().as_deref(), Some(HELP));
+    }
+
+    #[test]
+    fn ack_pair_is_none_because_it_needs_a_url() {
+        assert_eq!(BotCommand::Pair.ack(), None);
+    }
+
+    #[test]
+    fn help_text_lists_each_command() {
+        for c in ["/vibrate", "/stop", "/pair", "/help"] {
+            assert!(HELP.contains(c), "HELP missing {c}");
+        }
+    }
+
+    #[test]
+    fn invalid_reply_missing_strength_shows_usage() {
+        let r = invalid_reply(&ParseError::MissingStrength);
+        assert!(r.contains("/vibrate"), "got: {r}");
+        // The raw Debug name must not leak to the user.
+        assert!(!r.contains("MissingStrength"));
+    }
+
+    #[test]
+    fn invalid_reply_echoes_bad_strength() {
+        let r = invalid_reply(&ParseError::InvalidStrength("hard".into()));
+        assert!(r.contains("0-20"));
+        assert!(r.contains("hard"));
+    }
+
+    #[test]
+    fn invalid_reply_echoes_bad_duration() {
+        let r = invalid_reply(&ParseError::InvalidDuration("5y".into()));
+        assert!(r.contains("5y"));
+        assert!(r.contains("30s"));
+    }
+
+    #[test]
+    fn invalid_reply_names_unknown_command() {
+        let r = invalid_reply(&ParseError::UnknownCommand("wat".into()));
+        assert!(r.contains("/wat"));
+        assert!(r.contains("/help"));
+    }
+
+    #[test]
+    fn invalid_reply_is_total_over_all_errors() {
+        // Even the variants dispatch never surfaces produce a non-empty reply.
+        for e in [ParseError::Empty, ParseError::NotACommand] {
+            assert!(!invalid_reply(&e).is_empty());
+        }
     }
 }

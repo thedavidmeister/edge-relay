@@ -11,12 +11,6 @@ use crate::lovense::{self, QrRequest};
 use crate::telegram::{self, BotCommand, Dispatch};
 use worker::*;
 
-const HELP: &str = "Commands:\n\
-    /vibrate <0-20> [secs|30s|2m|1h]\n\
-    /stop\n\
-    /pair\n\
-    /help";
-
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     console_error_panic_hook::set_once();
@@ -57,7 +51,7 @@ async fn on_telegram(mut req: Request, ctx: RouteContext<()>) -> Result<Response
             Response::ok("ok")
         }
         Dispatch::Invalid { chat_id, error } => {
-            reply(&ctx, chat_id, &format!("Couldn't parse that: {error:?}"))
+            reply(&ctx, chat_id, &telegram::invalid_reply(&error))
                 .await
                 .ok();
             Response::ok("ok")
@@ -67,18 +61,15 @@ async fn on_telegram(mut req: Request, ctx: RouteContext<()>) -> Result<Response
 
 /// Perform the side effects for a recognized command and return the reply text.
 async fn run_command(ctx: &RouteContext<()>, command: BotCommand) -> Result<String> {
-    Ok(match command {
-        BotCommand::Vibrate { strength, time_sec } => {
-            send_lovense(ctx, Command::vibrate(strength, time_sec)).await?;
-            format!("Vibrate {strength} for {time_sec}s")
-        }
-        BotCommand::Stop => {
-            send_lovense(ctx, Command::stop()).await?;
-            "Stopped.".to_string()
-        }
-        BotCommand::Pair => format!("Scan to pair: {}", request_qr(ctx).await?),
-        BotCommand::Help | BotCommand::Status => HELP.to_string(),
-    })
+    // Pair is the only reply that needs a network result (the QR URL).
+    if let BotCommand::Pair = command {
+        return Ok(format!("Scan to pair: {}", request_qr(ctx).await?));
+    }
+    // Vibrate/Stop drive the toy; Help/Status have no effect.
+    if let Some(cmd) = command.to_lovense() {
+        send_lovense(ctx, cmd).await?;
+    }
+    Ok(command.ack().unwrap_or_default())
 }
 
 /// Lovense pairing callback — log the toy status and acknowledge.
