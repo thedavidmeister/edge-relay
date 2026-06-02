@@ -6,7 +6,7 @@
 //! perform the outbound HTTP.
 
 use crate::auth;
-use crate::command::{self, Command};
+use crate::command::Command;
 use crate::lovense::{self, QrRequest};
 use crate::telegram::{self, BotCommand, Dispatch};
 use worker::*;
@@ -93,8 +93,9 @@ async fn on_pair(_req: Request, ctx: RouteContext<()>) -> Result<Response> {
 async fn send_lovense(ctx: &RouteContext<()>, cmd: Command) -> Result<()> {
     let token = ctx.secret("LOVENSE_TOKEN")?.to_string();
     let uid = ctx.var("LOVENSE_UID")?.to_string();
+    let base = var_or(ctx, "LOVENSE_API_BASE", lovense::DEFAULT_API_BASE);
     let body = to_json(&cmd.to_server_body(&token, &uid))?;
-    post_json(command::COMMAND_URL, &body).await?;
+    post_json(&lovense::command_url(&base), &body).await?;
     Ok(())
 }
 
@@ -105,18 +106,27 @@ async fn request_qr(ctx: &RouteContext<()>) -> Result<String> {
         .secret("LOVENSE_SALT")
         .map(|s| s.to_string())
         .unwrap_or_default();
+    let base = var_or(ctx, "LOVENSE_API_BASE", lovense::DEFAULT_API_BASE);
     let body = to_json(&QrRequest::new(&token, &uid, "telegram", &salt))?;
-    let resp = post_json(lovense::QR_URL, &body).await?;
+    let resp = post_json(&lovense::qr_url(&base), &body).await?;
     // Fall back to the raw response if the QR field isn't where we expect.
     Ok(lovense::extract_qr_url(&resp).unwrap_or(resp))
 }
 
 async fn reply(ctx: &RouteContext<()>, chat_id: i64, text: &str) -> Result<()> {
     let token = ctx.secret("BOT_TOKEN")?.to_string();
-    let url = format!("https://api.telegram.org/bot{token}/sendMessage");
+    let base = var_or(ctx, "TELEGRAM_API_BASE", telegram::DEFAULT_TELEGRAM_BASE);
+    let url = telegram::send_message_url(&base, &token);
     let body = to_json(&serde_json::json!({ "chat_id": chat_id, "text": text }))?;
     post_json(&url, &body).await?;
     Ok(())
+}
+
+/// Read a worker var, falling back to `default` when it isn't set.
+fn var_or(ctx: &RouteContext<()>, name: &str, default: &str) -> String {
+    ctx.var(name)
+        .map(|v| v.to_string())
+        .unwrap_or_else(|_| default.to_string())
 }
 
 async fn post_json(url: &str, body: &str) -> Result<String> {

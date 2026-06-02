@@ -47,6 +47,16 @@ pub const HELP: &str = "Commands:\n\
     /pair\n\
     /help";
 
+/// Default base URL for the Telegram Bot API. Overridable via the
+/// `TELEGRAM_API_BASE` worker var (used by integration tests to redirect the
+/// worker's outbound replies at a stub server).
+pub const DEFAULT_TELEGRAM_BASE: &str = "https://api.telegram.org";
+
+/// The `sendMessage` endpoint for a given API base and bot token.
+pub fn send_message_url(base: &str, token: &str) -> String {
+    format!("{base}/bot{token}/sendMessage")
+}
+
 /// Parse raw Telegram message `text` into a [`BotCommand`].
 ///
 /// Accepts a leading `/`, an optional `@botname` suffix, and is
@@ -784,6 +794,18 @@ mod tests {
         for c in ["/vibrate", "/stop", "/pair", "/help"] {
             assert!(HELP.contains(c), "HELP missing {c}");
         }
+    }
+
+    #[test]
+    fn send_message_url_built_from_base_and_token() {
+        assert_eq!(
+            send_message_url(DEFAULT_TELEGRAM_BASE, "123:abc"),
+            "https://api.telegram.org/bot123:abc/sendMessage"
+        );
+        assert_eq!(
+            send_message_url("http://127.0.0.1:8788", "t"),
+            "http://127.0.0.1:8788/bott/sendMessage"
+        );
     }
 
     #[test]

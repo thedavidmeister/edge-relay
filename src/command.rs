@@ -15,9 +15,6 @@ use serde::Serialize;
 /// Maximum vibration strength accepted by Lovense (range is `0..=20`).
 pub const MAX_STRENGTH: u8 = 20;
 
-/// Lovense cloud-command endpoint.
-pub const COMMAND_URL: &str = "https://api.lovense.com/api/lan/command";
-
 /// A single `Function` command, independent of credentials.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Command {
@@ -177,10 +174,5 @@ mod tests {
     #[test]
     fn max_strength_constant_is_twenty() {
         assert_eq!(MAX_STRENGTH, 20);
-    }
-
-    #[test]
-    fn command_url_is_cloud_endpoint() {
-        assert_eq!(COMMAND_URL, "https://api.lovense.com/api/lan/command");
     }
 }

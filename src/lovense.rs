@@ -3,8 +3,20 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-/// Lovense `getQrCode` endpoint.
-pub const QR_URL: &str = "https://api.lovense.com/api/lan/getQrCode";
+/// Default base URL for the Lovense cloud API. Overridable via the
+/// `LOVENSE_API_BASE` worker var (used by integration tests to point the
+/// worker at a stub server).
+pub const DEFAULT_API_BASE: &str = "https://api.lovense.com";
+
+/// The `getQrCode` endpoint for a given API base.
+pub fn qr_url(base: &str) -> String {
+    format!("{base}/api/lan/getQrCode")
+}
+
+/// The cloud command endpoint for a given API base.
+pub fn command_url(base: &str) -> String {
+    format!("{base}/api/lan/command")
+}
 
 /// Body for `POST /api/lan/getQrCode`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -126,8 +138,24 @@ mod tests {
     }
 
     #[test]
-    fn qr_url_is_get_qr_endpoint() {
-        assert_eq!(QR_URL, "https://api.lovense.com/api/lan/getQrCode");
+    fn urls_are_built_from_the_base() {
+        assert_eq!(
+            qr_url(DEFAULT_API_BASE),
+            "https://api.lovense.com/api/lan/getQrCode"
+        );
+        assert_eq!(
+            command_url(DEFAULT_API_BASE),
+            "https://api.lovense.com/api/lan/command"
+        );
+        // A test/stub base is honoured.
+        assert_eq!(
+            qr_url("http://127.0.0.1:8788"),
+            "http://127.0.0.1:8788/api/lan/getQrCode"
+        );
+        assert_eq!(
+            command_url("http://127.0.0.1:8788"),
+            "http://127.0.0.1:8788/api/lan/command"
+        );
     }
 
     #[test]

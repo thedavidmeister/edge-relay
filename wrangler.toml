@@ -13,6 +13,8 @@ command = "worker-build --release"
 #   LOVENSE_TOKEN    - Lovense developer token
 #   ALLOWED_USER_ID  - your Telegram numeric user id (only this user may send commands)
 #
-# Plain vars (safe to commit) can go here:
+# Plain vars (safe to commit) can go here.
+# LOVENSE_API_BASE / TELEGRAM_API_BASE default to the real endpoints when unset;
+# the integration test overrides them to point the worker at a stub server.
 [vars]
 LOVENSE_UID = "gf"
