@@ -1,6 +1,16 @@
 name: Deploy
 
 # Manual only — deploying an intimate-device controller should be deliberate.
+# All credentials come from GitHub repository secrets (Settings → Secrets and
+# variables → Actions), never from the working tree. Required secrets:
+#   CLOUDFLARE_API_TOKEN   (Cloudflare → My Profile → API Tokens → "Edit
+#                           Cloudflare Workers" template)
+#   CLOUDFLARE_ACCOUNT_ID  (Cloudflare dashboard → Workers → Account ID)
+#   BOT_TOKEN              (Telegram @BotFather)
+#   TG_WEBHOOK_SECRET      (random string)
+#   LOVENSE_TOKEN          (Lovense developer dashboard)
+#   LOVENSE_SALT           (random string)
+#   ALLOWED_USER_ID        (your Telegram numeric user id)
 on:
   workflow_dispatch:
 
@@ -12,8 +22,46 @@ jobs:
       - uses: DeterminateSystems/nix-installer-action@main
       - uses: DeterminateSystems/magic-nix-cache-action@main
 
-      - name: wrangler deploy
-        run: nix develop --command wrangler deploy
+      - name: Deploy worker
+        id: deploy
+        run: |
+          out=$(nix develop --command wrangler deploy 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          url=$(echo "$out" | grep -oE 'https://[a-z0-9.-]+\.workers\.dev' | head -1)
+          echo "url=$url" >> "$GITHUB_OUTPUT"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Push worker secrets to Cloudflare
+        run: |
+          for name in BOT_TOKEN TG_WEBHOOK_SECRET LOVENSE_TOKEN LOVENSE_SALT ALLOWED_USER_ID; do
+            printf '%s' "${!name}" | nix develop --command wrangler secret put "$name"
+          done
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          TG_WEBHOOK_SECRET: ${{ secrets.TG_WEBHOOK_SECRET }}
+          LOVENSE_TOKEN: ${{ secrets.LOVENSE_TOKEN }}
+          LOVENSE_SALT: ${{ secrets.LOVENSE_SALT }}
+          ALLOWED_USER_ID: ${{ secrets.ALLOWED_USER_ID }}
+
+      - name: Point Telegram at the worker
+        run: |
+          url='${{ steps.deploy.outputs.url }}'
+          if [ -z "$url" ]; then
+            echo "::warning::Could not parse the worker URL from deploy output."
+            echo "Set the webhook manually: scripts/set-webhook.sh set"
+            exit 0
+          fi
+          curl -fsS "https://api.telegram.org/bot${BOT_TOKEN}/setWebhook" \
+            -d "url=${url}/telegram" \
+            -d "secret_token=${TG_WEBHOOK_SECRET}" \
+            -d 'allowed_updates=["message"]'
+          echo
+          echo "::notice::Worker deployed at ${url}"
+          echo "::notice::Set the Lovense dashboard Callback URL to ${url}/lovense-callback"
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          TG_WEBHOOK_SECRET: ${{ secrets.TG_WEBHOOK_SECRET }}
