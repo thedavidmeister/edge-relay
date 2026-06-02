@@ -19,7 +19,7 @@ md5 = "0.7"
 # `worker` only compiles for wasm32, so native `cargo test`/`clippy` never pull
 # it in — the pure logic in command/telegram/lovense/auth is tested on the host.
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-worker = "0.4"
+worker = "0.8"
 console_error_panic_hook = "0.1"
 
 [profile.release]
